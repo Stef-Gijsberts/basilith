@@ -10,13 +10,24 @@
 
 (def aplay-stdin (p/stdin aplay))
 
-(defn float-le
-  [sample]
-  (let [bb (ByteBuffer/allocate 4)]
-    (.order bb ByteOrder/LITTLE_ENDIAN)
-    (.putFloat bb (float sample))
-    (.array bb)))
+(def settings (atom {:frequency-hz 440
+                     :gain-factor 1.0}))
 
-(doseq [t (range 0 sample-rate-hz)]
-  (.write aplay-stdin
-          (float-le (sin (* 2 PI 440 (/ t sample-rate-hz))))))
+(comment
+  (swap! settings assoc :frequency-hz (+ 400 (rand-int 200)))
+  (swap! settings assoc :gain-factor (rand)))
+
+(def chunk-size (/ sample-rate-hz 4))
+
+(def buffer (ByteBuffer/allocate (* 4 chunk-size)))
+(.order buffer ByteOrder/LITTLE_ENDIAN)
+
+(future
+  (dotimes [chunk-index 20]
+    (let [s @settings]
+      (.clear buffer)
+      (dotimes [i chunk-size]
+        (let [sample-index (+ (* chunk-index chunk-size) i)
+              t-seconds (/ sample-index sample-rate-hz)]
+          (.putFloat buffer (* (:gain-factor s) (sin (* 2.0 PI (:frequency-hz s) t-seconds))))))
+      (.write aplay-stdin (.array buffer)))))
