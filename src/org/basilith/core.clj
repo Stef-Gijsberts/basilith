@@ -1,4 +1,4 @@
-(ns org.basil.core
+(ns org.basilith.core
     (:import [java.nio ByteBuffer ByteOrder])
   (:require
    [clojure.java.process :as p]
