@@ -1,7 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{self, SizedSample};
-use dasp::{Sample, Signal, signal};
-use std::sync::mpsc;
+use cpal::{self, FromSample, SizedSample};
+use dasp::{Frame, Sample, Signal, ring_buffer, signal};
 
 fn main() -> Result<(), anyhow::Error> {
     let host = cpal::default_host();
@@ -19,63 +18,39 @@ fn main() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn run<T: SizedSample + From<f32>>(
+fn run<T: SizedSample + FromSample<f64>>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
 ) -> Result<(), anyhow::Error> {
-    // Create a signal chain to play back 1 second of each oscillator at A4.
-    let hz = signal::rate(config.sample_rate.0 as f64).const_hz(440.0);
-    let one_sec = config.sample_rate.0 as usize;
-    let mut synth = hz
-        .clone()
-        .sine()
-        .take(one_sec)
-        .chain(hz.clone().saw().take(one_sec))
-        .chain(hz.clone().square().take(one_sec))
-        .chain(hz.clone().noise_simplex().take(one_sec))
-        .chain(signal::noise(0).take(one_sec))
-        .map(|s| s.to_sample::<f32>() * 0.2);
+    let a_4 = signal::rate(config.sample_rate.0.into()).const_hz(440.0);
 
-    // A channel for indicating when playback has completed.
-    let (complete_tx, complete_rx) = mpsc::sync_channel(1);
+    let mut sine = a_4.sine();
 
     // Create and run the stream.
     let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
     let channels = config.channels as usize;
     let stream = device.build_output_stream(
         config,
-        move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-            write_data(data, channels, &complete_tx, &mut synth)
-        },
+        move |data: &mut [T], _: &cpal::OutputCallbackInfo| write_data(data, channels, &mut sine),
         err_fn,
         None,
     )?;
     stream.play()?;
 
-    // Wait for playback to complete.
-    complete_rx.recv().unwrap();
-    stream.pause()?;
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 
     Ok(())
 }
 
-fn write_data<T: SizedSample + From<f32>>(
-    output: &mut [T],
-    channels: usize,
-    complete_tx: &mpsc::SyncSender<()>,
-    signal: &mut dyn Iterator<Item = f32>,
-) {
+fn write_data<T>(output: &mut [T], channels: usize, signal: &mut dyn Signal<Frame = f64>)
+where
+    T: Sample + FromSample<f64>,
+{
     for frame in output.chunks_mut(channels) {
-        let sample = match signal.next() {
-            None => {
-                complete_tx.try_send(()).ok();
-                0.0
-            }
-            Some(sample) => sample,
-        };
-        let value: T = sample.into();
-        for sample in frame.iter_mut() {
-            *sample = value;
+        for frame_sample in frame.iter_mut() {
+            *frame_sample = signal.next().to_sample::<T>();
         }
     }
 }
